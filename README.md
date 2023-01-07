@@ -3,7 +3,23 @@
 [TOC]
 
 
+
+对于Python构建ARIMA模型,可以使用`pmdarima`库
+
+> `pmdarima` brings R’s beloved `auto.arima` to Python, making an even stronger case for why you don’t need R for data science. `pmdarima` is 100% Python + Cython and does not leverage any R code, but is implemented in a powerful, yet easy-to-use set of functions & classes that will be familiar to scikit-learn users.
+
+
+
+
+
+**处理时间序列的最终目的便是预测,为了实现有效预测,我们需要经过如下过程:**
+
+
+
+
+
 ### 1. 导入数据
+
 ```python
 pd.read_csv('https://raw.githubusercontent.com/selva86/datasets/master/sunspotarea.csv',parse_dates=['date'],index_col='date')
 ```
@@ -190,9 +206,132 @@ $Y_i = A_0+E_i$
 
 [ARIMA Model - Complete Guide to Time Series Forecasting in Python | ML+ (machinelearningplus.com)](https://www.machinelearningplus.com/time-series/arima-model-time-series-forecasting-python/)
 
-#### 第一步,将模型转换为平稳序列
 
-**差分:difference**
+
+#### AR模型
+
+AR:即Auto regression,自回归.$Y_t$ depends only on its own lags.
+
+AR模型的方程:$Y_t = \alpha+Y_t+\mu_1 Y_{t-1}+\mu_2 Y_{t-2}+...+\mu_q Y_{t-q},$其中,$\epsilon_t$表示误差项.
+
+其中,参数$q$等于pacf图像之中$lag$最初收敛到$95\%$置信区间的值
+
+对于一个$AR(1)$模型而言:
+
++ 当$\mu_1 = 0$时,$Y_t$相当于白噪声.
++ 当$\mu_1 = 1$且$\alpha = 0$时,$Y_t$相当于随机游走模型
++ 当$\mu_1 = 1$且$\alpha \not=0$时,$Y_t$相当于带漂移的随机游走模型
++ 当$\mu_1 < 0$时,$Y_t$在正负值之间上下浮动
+
+#### MA模型
+
+$MA$,即moving average模型.使用历史预测五擦黄来建立一个类似回归的模型.即$q$阶移动平均模型.方程如下:
+
+$Y_t = c + \epsilon_t+\theta_1 \epsilon_{t-1}+\theta_2 \epsilon_{t-2}+...+\theta_q \epsilon_{t-q}$
+
+其中,$\epsilon_t$表示白噪声.
+
+其中,$q$由$ACF$图像之中tag阶段的结束决定.具体见下表.
+
+
+
+|        | $AR(p)$   | $MA(q)$   | $ARMA(p,d,q)$ |
+| ------ | --------- | --------- | ------------- |
+| $ACF$  | 拖尾      | q阶后截断 | 拖尾          |
+| $PACF$ | p阶后截断 | 拖尾      | 拖尾          |
+
+
+
+当$ACF$以及$PACF$图像均不截断(或者阶段结束>10)时,我们需要对序列进行差分处理.直接使用`dataframe.value.diff()`进行处理即可.多次差分观察序列图像,$ACF$以及$PACF$图像,获取$(p,d,q)$数值.
+
+<img src='差分.png'>
+
+观察上图,原始图像以及1阶差分均无法stationary,进行到二阶差分时,pacf图像截断.但是lag = 3时,直接跑到了0轴之下很远.所以我们应该考虑使用1作为差分阶数$d$
+
+使用`pmdarima.arima.utils`也可以直接得到$d$,如下:
+
+```pyhton
+from pmdarima.arima.utils import ndiffs
+df = pd.read_csv('https://raw.githubusercontent.com/selva86/datasets/master/wwwusage.csv', names=['value'], header=0)
+y = df.value
+
+## Adf Test
+ndiffs(y, test='adf')  # 2
+
+# KPSS test
+ndiffs(y, test='kpss')  # 0
+
+# PP test:
+ndiffs(y, test='pp')  # 2
+```
+
+
+
+#### 建立ARIMA模型
+
+```python
+from statsmodels.tsa.arima_model import ARIMA
+
+# 1,1,2 ARIMA Model
+model = ARIMA(df.value, order=(1,1,2))
+model_fit = model.fit(disp=0)
+print(model_fit.summary())
+```
+
+也可以使用`pmdarima`直接进行建模
+
+使用`statsmodel`进行建模所得结果如下:
+
+```python
+                             ARIMA Model Results                              
+==============================================================================
+Dep. Variable:                D.value   No. Observations:                   99
+Model:                 ARIMA(1, 1, 2)   Log Likelihood                -253.790
+Method:                       css-mle   S.D. of innovations              3.119
+Date:                Wed, 06 Feb 2019   AIC                            517.579
+Time:                        23:32:56   BIC                            530.555
+Sample:                             1   HQIC                           522.829
+
+=================================================================================
+                    coef    std err          z      P>|z|      [0.025      0.975]
+---------------------------------------------------------------------------------
+const             1.1202      1.290      0.868      0.387      -1.409       3.649
+ar.L1.D.value     0.6351      0.257      2.469      0.015       0.131       1.139
+ma.L1.D.value     0.5287      0.355      1.489      0.140      -0.167       1.224
+ma.L2.D.value    -0.0010      0.321     -0.003      0.998      -0.631       0.629
+                                    Roots                                    
+=============================================================================
+                  Real          Imaginary           Modulus         Frequency
+-----------------------------------------------------------------------------
+AR.1            1.5746           +0.0000j            1.5746            0.0000
+MA.1           -1.8850           +0.0000j            1.8850            0.5000
+MA.2          545.3515           +0.0000j          545.3515            0.0000
+-----------------------------------------------------------------------------
+```
+
+**参数解读**
+
+
+
+
+
+
+
+
+
+
+
+### 8.模型调优:Out of Time Cross validation
+
+1. 分割训练集与测试集
+
+2. 创建ARIMA模型
+3. 绘制模型:
+4. 
+
+
+
+
 
 
 
