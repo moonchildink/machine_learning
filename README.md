@@ -1,4 +1,4 @@
-# 对于数学建模时间序列分析的一般性步骤
+# 对于时间序列分析进行数学建模的一般性步骤
 
 [TOC]
 
@@ -12,7 +12,14 @@
 
 
 
-**处理时间序列的最终目的便是预测,为了实现有效预测,我们需要经过如下过程:**
+**简单来说,时间序列分析需要经过如下过程:**
+
+1. 观察数据是否是**白噪声**:白噪声没有任何分析价值
+2. 观察数据是否平稳:使用$ADF$和$KPSS$进行检验
+3. 如果平稳:绘制$ACF$和$PACF$图像,观察$p-value$和$q-value$.
+4. 如果非平稳:差分,直接使用`pd.value.diff()`,绘制图像,获取$(p,d,q)$值
+5. 建立模型
+6. 模型评估,预测
 
 
 
@@ -117,7 +124,102 @@ Critial Values:
 最邻近平均值；
 对应季节的平均值。
 
+```python
+# # Generate dataset
+from scipy.interpolate import interp1d
+from sklearn.metrics import mean_squared_error
+
+df_orig = pd.read_csv('https://raw.githubusercontent.com/selva86/datasets/master/a10.csv', parse_dates=['date'],
+                      index_col='date').head(100)
+df = pd.read_csv('datasets/a10_missings.csv', parse_dates=['date'], index_col='date')
+
+fig, axes = plt.subplots(7, 1, sharex=True, figsize=(10, 12))
+plt.rcParams.update({'xtick.bottom': False})
+
+## 1. Actual -------------------------------
+df_orig.plot(title='Actual', ax=axes[0], label='Actual', color='red', style=".-")
+df.plot(title='Actual', ax=axes[0], label='Actual', color='green', style=".-")
+axes[0].legend(["Missing Data", "Available Data"])
+
+## 2. Forward Fill --------------------------
+df_ffill = df.ffill()
+error = np.round(mean_squared_error(df_orig['value'], df_ffill['value']), 2)
+df_ffill['value'].plot(title='Forward Fill (MSE: ' + str(error) + ")", ax=axes[1], label='Forward Fill', style=".-")
+
+## 3. Backward Fill -------------------------
+df_bfill = df.bfill()
+error = np.round(mean_squared_error(df_orig['value'], df_bfill['value']), 2)
+df_bfill['value'].plot(title="Backward Fill (MSE: " + str(error) + ")", ax=axes[2], label='Back Fill',
+                       color='firebrick', style=".-")
+
+## 4. Linear Interpolation ------------------
+df['rownum'] = np.arange(df.shape[0])
+df_nona = df.dropna(subset=['value'])
+f = interp1d(df_nona['rownum'], df_nona['value'])
+df['linear_fill'] = f(df['rownum'])
+error = np.round(mean_squared_error(df_orig['value'], df['linear_fill']), 2)
+df['linear_fill'].plot(title="Linear Fill (MSE: " + str(error) + ")", ax=axes[3], label='Cubic Fill', color='brown',
+                       style=".-")
+
+## 5. Cubic Interpolation --------------------
+f2 = interp1d(df_nona['rownum'], df_nona['value'], kind='cubic')
+df['cubic_fill'] = f2(df['rownum'])
+error = np.round(mean_squared_error(df_orig['value'], df['cubic_fill']), 2)
+df['cubic_fill'].plot(title="Cubic Fill (MSE: " + str(error) + ")", ax=axes[4], label='Cubic Fill', color='red',
+                      style=".-")
+
+
+# Interpolation References:
+# https://docs.scipy.org/doc/scipy/reference/tutorial/interpolate.html
+# https://docs.scipy.org/doc/scipy/reference/interpolate.html
+
+## 6. Mean of 'n' Nearest Past Neighbors ------
+def knn_mean(ts, n):
+    out = np.copy(ts)
+    for i, val in enumerate(ts):
+        if np.isnan(val):
+            n_by_2 = np.ceil(n / 2)
+            lower = np.max([0, int(i - n_by_2)])
+            upper = np.min([len(ts) + 1, int(i + n_by_2)])
+            ts_near = np.concatenate([ts[lower:i], ts[i:upper]])
+            out[i] = np.nanmean(ts_near)
+    return out
+
+
+df['knn_mean'] = knn_mean(df.value.values, 8)
+error = np.round(mean_squared_error(df_orig['value'], df['knn_mean']), 2)
+df['knn_mean'].plot(title="KNN Mean (MSE: " + str(error) + ")", ax=axes[5], label='KNN Mean', color='tomato', alpha=0.5,
+                    style=".-")
+
+
+## 7. Seasonal Mean ----------------------------
+def seasonal_mean(ts, n, lr=0.7):
+    """
+    Compute the mean of corresponding seasonal periods
+    ts: 1D array-like of the time series
+    n: Seasonal window length of the time series
+    """
+    out = np.copy(ts)
+    for i, val in enumerate(ts):
+        if np.isnan(val):
+            ts_seas = ts[i - 1::-n]  # previous seasons only
+            if np.isnan(np.nanmean(ts_seas)):
+                ts_seas = np.concatenate([ts[i - 1::-n], ts[i::n]])  # previous and forward
+            out[i] = np.nanmean(ts_seas) * lr
+    return out
+
+
+df['seasonal_mean'] = seasonal_mean(df.value, n=12, lr=1.25)
+error = np.round(mean_squared_error(df_orig['value'], df['seasonal_mean']), 2)
+df['seasonal_mean'].plot(title="Seasonal Mean (MSE: " + str(error) + ")", ax=axes[6], label='Seasonal Mean',
+                         color='blue', alpha=0.5, style=".-")
+```
+
+
+
 ### 6. 自相关和偏自相关函数
+
+自相关函数和偏自相关函数是时间序列数学建模之中最重要的步骤之一
 
 #### 自相关函数
 
@@ -206,7 +308,9 @@ $Y_i = A_0+E_i$
 
 [ARIMA Model - Complete Guide to Time Series Forecasting in Python | ML+ (machinelearningplus.com)](https://www.machinelearningplus.com/time-series/arima-model-time-series-forecasting-python/)
 
+建立$ARIMA(p,d,q)$模型最终的几个参数:
 
+> Non-seasonal ARIMA models are generally denoted `ARIMA(p,d,q)` where parameters `p`, `d`, and `q` are non-negative integers, `p` is the order (number of time lags) of the autoregressive model, `d` is the degree of differencing (the number of times the data have had past values subtracted), and `q` is the order of the moving-average model.
 
 #### AR模型
 
@@ -311,23 +415,15 @@ MA.2          545.3515           +0.0000j          545.3515            0.0000
 
 **参数解读**
 
+一个良好的ARIMA模型之中,$P>|z|$一栏之中的各项数值均应该小于$0.05$.同时参数$AIC$也可以衡量模型的优劣.通常,$AIC$的数值越小越好.
 
 
 
 
 
+### 8.Holt-Winters模型
 
 
-
-
-
-### 8.模型调优:Out of Time Cross validation
-
-1. 分割训练集与测试集
-
-2. 创建ARIMA模型
-3. 绘制模型:
-4. 
 
 
 
